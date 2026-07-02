@@ -1,0 +1,64 @@
+# Dependencies
+node_modules
+
+# Build outputs
+.next
+dist
+build
+out
+
+# Testing
+coverage
+test-results
+playwright-report
+e2e
+*.spec.ts
+*.test.ts
+
+# Version control
+.git
+.gitignore
+.github
+
+# Environment variables (add back in your deployment if needed)
+.env
+.env.*
+.env.local
+.env.development
+.env.test
+.env.production
+!.env.example
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDEs
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker
+Dockerfile
+Dockerfile.*
+.dockerignore
+docker-compose*.yml
+
+# Documentation
+README.md
+LICENSE
+*.md
+
+# Config files (not needed in image)
+tsconfig.tsbuildinfo
+vitest.config.ts
+playwright.config.ts
+
+.history
