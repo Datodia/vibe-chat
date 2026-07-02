@@ -4,7 +4,12 @@ const MessageSchema = new Schema(
   {
     conversationId: { type: String, required: true, index: true },
     from: { type: String, required: true },
-    to: { type: String, required: true },
+    // Denormalized sender name — used to label messages in group chats.
+    fromName: { type: String, required: false, default: '' },
+    // Recipient for direct messages; empty for group messages.
+    to: { type: String, required: false, default: '' },
+    // Set for group messages (equals the group id, also the conversationId).
+    groupId: { type: String, required: false, default: null },
     text: { type: String, required: true, maxlength: 2000 },
   },
   { timestamps: true }

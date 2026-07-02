@@ -1,8 +1,8 @@
 'use client';
-import { SendHorizontal } from 'lucide-react';
+import { SendHorizontal, UsersRound } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 
-import type { ChatMessage, OnlineUser } from '@/features/chat/types/chat.types';
+import type { ChatMessage } from '@/features/chat/types/chat.types';
 import { Button } from '@/shared/components/ui/button';
 import { Input } from '@/shared/components/ui/input';
 import { cn } from '@/shared/lib/utils';
@@ -13,13 +13,23 @@ function formatTime(iso: string): string {
 
 type ChatWindowProps = {
   myId: string;
-  peer: OnlineUser | null;
-  isPeerOnline: boolean;
+  title: string | null;
+  subtitle?: string;
+  isGroup?: boolean;
+  online?: boolean;
   messages: ChatMessage[];
   onSend: (text: string) => void;
 };
 
-export const ChatWindow = ({ myId, peer, isPeerOnline, messages, onSend }: ChatWindowProps) => {
+export const ChatWindow = ({
+  myId,
+  title,
+  subtitle,
+  isGroup = false,
+  online = false,
+  messages,
+  onSend,
+}: ChatWindowProps) => {
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -27,7 +37,7 @@ export const ChatWindow = ({ myId, peer, isPeerOnline, messages, onSend }: ChatW
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages]);
 
-  if (!peer) {
+  if (!title) {
     return <section className="flex-1" aria-hidden="true" />;
   }
 
@@ -41,24 +51,24 @@ export const ChatWindow = ({ myId, peer, isPeerOnline, messages, onSend }: ChatW
   return (
     <section className="flex flex-1 flex-col">
       <header className="flex items-center gap-2 border-b border-border px-5 py-3">
-        <span
-          className={cn(
-            'size-2 rounded-full',
-            isPeerOnline ? 'bg-emerald-500' : 'bg-muted-foreground/40'
-          )}
-          aria-hidden="true"
-        />
-        <h2 className="text-sm font-semibold">{peer.name}</h2>
-        <span className="text-xs text-muted-foreground">
-          {isPeerOnline ? 'online' : 'offline'}
-        </span>
+        {isGroup ? (
+          <UsersRound className="size-4 text-muted-foreground" aria-hidden="true" />
+        ) : (
+          <span
+            className={cn(
+              'size-2 rounded-full',
+              online ? 'bg-emerald-500' : 'bg-muted-foreground/40'
+            )}
+            aria-hidden="true"
+          />
+        )}
+        <h2 className="text-sm font-semibold">{title}</h2>
+        {subtitle && <span className="text-xs text-muted-foreground">{subtitle}</span>}
       </header>
 
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-5">
         {messages.length === 0 ? (
-          <p className="text-center text-sm text-muted-foreground">
-            No messages yet. Say hi 👋
-          </p>
+          <p className="text-center text-sm text-muted-foreground">No messages yet. Say hi 👋</p>
         ) : (
           messages.map((message) => {
             const mine = message.from === myId;
@@ -67,6 +77,11 @@ export const ChatWindow = ({ myId, peer, isPeerOnline, messages, onSend }: ChatW
                 key={message.id}
                 className={cn('flex flex-col', mine ? 'items-end' : 'items-start')}
               >
+                {isGroup && !mine && message.fromName && (
+                  <span className="mb-0.5 px-1 text-xs font-medium text-muted-foreground">
+                    {message.fromName}
+                  </span>
+                )}
                 <div
                   className={cn(
                     'max-w-[75%] rounded-2xl px-3.5 py-2 text-sm',
@@ -90,7 +105,7 @@ export const ChatWindow = ({ myId, peer, isPeerOnline, messages, onSend }: ChatW
         <Input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={`Message ${peer.name}`}
+          placeholder={`Message ${title}`}
           aria-label="Message"
           autoComplete="off"
         />

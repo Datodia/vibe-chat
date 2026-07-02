@@ -1,6 +1,9 @@
 'use client';
+import { useState } from 'react';
+
+import { ChatSidebar } from '@/features/chat/components/chat-sidebar';
 import { ChatWindow } from '@/features/chat/components/chat-window';
-import { OnlineUsers } from '@/features/chat/components/online-users';
+import { NewGroupDialog } from '@/features/chat/components/new-group-dialog';
 import { useChat } from '@/features/chat/hooks/use-chat';
 import { cn } from '@/shared/lib/utils';
 
@@ -9,14 +12,33 @@ export const ChatApp = () => {
     myId,
     connected,
     users,
+    groups,
+    allUsers,
     onlineCount,
-    selectedId,
-    selectedUser,
+    selected,
+    selectedGroup,
+    selectedDirectUser,
     isSelectedOnline,
     messages,
-    selectUser,
+    selectDirect,
+    selectGroup,
     sendMessage,
+    createGroup,
   } = useChat();
+
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  const isGroup = selected?.type === 'group';
+  const title = isGroup ? selectedGroup?.name ?? null : selectedDirectUser?.name ?? null;
+  const subtitle = isGroup
+    ? selectedGroup
+      ? `${selectedGroup.members.length} members`
+      : undefined
+    : selected
+      ? isSelectedOnline
+        ? 'online'
+        : 'offline'
+      : undefined;
 
   return (
     <div
@@ -40,24 +62,37 @@ export const ChatApp = () => {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Hide the list on mobile once a chat is open. */}
-        <div className={cn('flex sm:flex', selectedId ? 'hidden sm:flex' : 'flex w-full')}>
-          <OnlineUsers
+        <div className={cn('flex sm:flex', selected ? 'hidden sm:flex' : 'flex w-full')}>
+          <ChatSidebar
             users={users}
+            groups={groups}
             onlineCount={onlineCount}
-            selectedId={selectedId}
-            onSelect={selectUser}
+            selected={selected}
+            onSelectDirect={selectDirect}
+            onSelectGroup={selectGroup}
+            onNewGroup={() => setDialogOpen(true)}
           />
         </div>
-        <div className={cn('flex-1', selectedId ? 'flex' : 'hidden sm:flex')}>
+        <div className={cn('flex-1', selected ? 'flex' : 'hidden sm:flex')}>
           <ChatWindow
             myId={myId}
-            peer={selectedUser}
-            isPeerOnline={isSelectedOnline}
+            title={title}
+            subtitle={subtitle}
+            isGroup={isGroup}
+            online={isSelectedOnline}
             messages={messages}
             onSend={sendMessage}
           />
         </div>
       </div>
+
+      {dialogOpen && (
+        <NewGroupDialog
+          users={allUsers}
+          onClose={() => setDialogOpen(false)}
+          onCreate={createGroup}
+        />
+      )}
     </div>
   );
 };

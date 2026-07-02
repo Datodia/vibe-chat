@@ -5,12 +5,21 @@ import { mongo } from '@/shared/lib/mongo';
 const HISTORY_LIMIT = 100;
 
 export const messageRepository = {
-  async create(data: { from: string; to: string; text: string }): Promise<MessageDocument> {
+  async create(data: {
+    from: string;
+    fromName?: string;
+    to?: string;
+    groupId?: string;
+    text: string;
+  }): Promise<MessageDocument> {
     await mongo.connect();
+    const conversationId = data.groupId ?? conversationIdFor(data.from, data.to ?? '');
     const doc = await MessageModel.create({
-      conversationId: conversationIdFor(data.from, data.to),
+      conversationId,
       from: data.from,
-      to: data.to,
+      fromName: data.fromName ?? '',
+      to: data.to ?? '',
+      groupId: data.groupId ?? null,
       text: data.text,
     });
     return doc.toObject() as MessageDocument;
@@ -19,6 +28,15 @@ export const messageRepository = {
   async findConversation(a: string, b: string, limit = HISTORY_LIMIT): Promise<MessageDocument[]> {
     await mongo.connect();
     return MessageModel.find({ conversationId: conversationIdFor(a, b) })
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean<MessageDocument[]>()
+      .exec();
+  },
+
+  async findByConversationId(conversationId: string, limit = HISTORY_LIMIT): Promise<MessageDocument[]> {
+    await mongo.connect();
+    return MessageModel.find({ conversationId })
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean<MessageDocument[]>()

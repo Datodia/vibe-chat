@@ -1,6 +1,6 @@
 'use client';
 import { useSession } from 'next-auth/react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 
 import {
@@ -9,16 +9,14 @@ import {
   type ClientToServerEvents,
   type ServerToClientEvents,
 } from '@/features/chat/socket/socket-events';
-import type { ChatContact, ChatMessage, OnlineUser } from '@/features/chat/types/chat.types';
+import type { ChatMessage, Group, OnlineUser } from '@/features/chat/types/chat.types';
 import { http } from '@/shared/lib/http';
 
-type SessionUser = {
-  id?: string;
-  name?: string | null;
-  avatar?: string | null;
-};
+import { buildSidebarGroups, buildSidebarUsers } from './chat-selectors';
 
+type SessionUser = { id?: string; name?: string | null; avatar?: string | null };
 type ChatSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+type Selection = { type: 'direct' | 'group'; id: string } | null;
 
 export function useChat() {
   const { data: session } = useSession();
@@ -29,21 +27,35 @@ export function useChat() {
   const [connected, setConnected] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const [contacts, setContacts] = useState<OnlineUser[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [allUsers, setAllUsers] = useState<OnlineUser[]>([]);
   const [knownUsers, setKnownUsers] = useState<Record<string, OnlineUser>>({});
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Selection>(null);
   const [conversations, setConversations] = useState<Record<string, ChatMessage[]>>({});
+  const [unread, setUnread] = useState<Record<string, number>>({});
 
   const contactIdsRef = useRef<Set<string>>(new Set());
+  const pendingGroupSelectRef = useRef(false);
 
-  const mergeKnown = useCallback((users: OnlineUser[]) => {
+  const mergeKnown = useCallback((list: OnlineUser[]) => {
     setKnownUsers((prev) => {
       const next = { ...prev };
-      for (const u of users) next[u.id] = u;
+      for (const u of list) next[u.id] = u;
       return next;
     });
   }, []);
 
-  // Past conversation partners (persist in the list even when offline).
+  const selectedConversationId = !selected
+    ? null
+    : selected.type === 'group'
+      ? selected.id
+      : conversationIdFor(myId, selected.id);
+
+  const selectedConvRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedConvRef.current = selectedConversationId;
+  }, [selectedConversationId]);
+
   const refreshContacts = useCallback(() => {
     if (!myId) return;
     http
@@ -53,26 +65,23 @@ export function useChat() {
         contactIdsRef.current = new Set(list.map((c) => c.id));
         mergeKnown(list);
       })
-      .catch(() => {
-        /* keep current list on failure */
-      });
+      .catch(() => {});
   }, [myId, mergeKnown]);
 
-  // Keep a stable ref so the socket effect can call the latest version
-  // without reconnecting whenever the callback identity changes.
   const refreshContactsRef = useRef(refreshContacts);
   useEffect(() => {
     refreshContactsRef.current = refreshContacts;
   }, [refreshContacts]);
 
   useEffect(() => {
+    if (!myId) return;
     refreshContacts();
-  }, [refreshContacts]);
+    http.get<{ groups: Group[] }>('/groups').then((r) => setGroups(r.groups)).catch(() => {});
+    http.get<{ users: OnlineUser[] }>('/users').then((r) => setAllUsers(r.users)).catch(() => {});
+  }, [myId, refreshContacts]);
 
-  // Establish the socket connection once we know who we are.
   useEffect(() => {
     if (!myId || !me?.name) return;
-
     const socket = io({
       auth: { userId: myId, name: me.name, avatar: me.avatar ?? null },
     }) as ChatSocket;
@@ -80,8 +89,8 @@ export function useChat() {
 
     socket.on('connect', () => setConnected(true));
     socket.on('disconnect', () => setConnected(false));
-    socket.on(SOCKET_EVENTS.presenceUpdate, (users) => {
-      const others = users.filter((u) => u.id !== myId);
+    socket.on(SOCKET_EVENTS.presenceUpdate, (list) => {
+      const others = list.filter((u) => u.id !== myId);
       setOnlineUsers(others);
       mergeKnown(others);
     });
@@ -91,12 +100,30 @@ export function useChat() {
         if (existing.some((m) => m.id === message.id)) return prev;
         return { ...prev, [message.conversationId]: [...existing, message] };
       });
-
-      // First message to/from a new partner → pull them into the contacts list.
-      const partnerId = message.from === myId ? message.to : message.from;
-      if (partnerId !== myId && !contactIdsRef.current.has(partnerId)) {
-        contactIdsRef.current.add(partnerId);
-        refreshContactsRef.current();
+      if (message.from !== myId && message.conversationId !== selectedConvRef.current) {
+        setUnread((prev) => ({
+          ...prev,
+          [message.conversationId]: (prev[message.conversationId] ?? 0) + 1,
+        }));
+      }
+      if (!message.groupId) {
+        const partnerId = message.from === myId ? message.to : message.from;
+        if (partnerId && partnerId !== myId && !contactIdsRef.current.has(partnerId)) {
+          contactIdsRef.current.add(partnerId);
+          refreshContactsRef.current();
+        }
+      }
+    });
+    socket.on(SOCKET_EVENTS.groupNew, (group) => {
+      setGroups((prev) =>
+        prev.some((g) => g.id === group.id)
+          ? prev.map((g) => (g.id === group.id ? group : g))
+          : [group, ...prev]
+      );
+      mergeKnown(group.members);
+      if (group.createdBy === myId && pendingGroupSelectRef.current) {
+        pendingGroupSelectRef.current = false;
+        setSelected({ type: 'group', id: group.id });
       }
     });
 
@@ -106,75 +133,70 @@ export function useChat() {
     };
   }, [myId, me?.name, me?.avatar, mergeKnown]);
 
-  // Load history when a conversation partner is selected.
   useEffect(() => {
-    if (!myId || !selectedId) return;
-    const conversationId = conversationIdFor(myId, selectedId);
+    if (!selectedConversationId || !selected) return;
+    const conversationId = selectedConversationId;
+    const params = selected.type === 'group' ? { groupId: selected.id } : { userId: selected.id };
     let cancelled = false;
-
     http
-      .get<{ messages: ChatMessage[] }>('/messages', { params: { userId: selectedId } })
+      .get<{ messages: ChatMessage[] }>('/messages', { params })
       .then(({ messages }) => {
-        if (cancelled) return;
-        setConversations((prev) => ({ ...prev, [conversationId]: messages }));
+        if (!cancelled) setConversations((prev) => ({ ...prev, [conversationId]: messages }));
       })
-      .catch(() => {
-        /* keep whatever we already have on failure */
-      });
-
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [myId, selectedId]);
+  }, [selected, selectedConversationId]);
 
-  const selectUser = useCallback((id: string) => setSelectedId(id), []);
+  const select = useCallback((type: 'direct' | 'group', id: string) => {
+    setSelected({ type, id });
+    const conversationId = type === 'group' ? id : conversationIdFor(myId, id);
+    setUnread((prev) => (prev[conversationId] ? { ...prev, [conversationId]: 0 } : prev));
+  }, [myId]);
 
   const sendMessage = useCallback(
     (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || !selectedId || !socketRef.current) return;
-      socketRef.current.emit(SOCKET_EVENTS.chatSend, { to: selectedId, text: trimmed });
+      if (!trimmed || !selected || !socketRef.current) return;
+      if (selected.type === 'group') {
+        socketRef.current.emit(SOCKET_EVENTS.groupSend, { groupId: selected.id, text: trimmed });
+      } else {
+        socketRef.current.emit(SOCKET_EVENTS.chatSend, { to: selected.id, text: trimmed });
+      }
     },
-    [selectedId]
+    [selected]
   );
 
-  const selectedUser = useMemo(
-    () => (selectedId ? knownUsers[selectedId] ?? null : null),
-    [knownUsers, selectedId]
-  );
+  const createGroup = useCallback((name: string, memberIds: string[]) => {
+    if (!socketRef.current || !name.trim() || memberIds.length === 0) return;
+    pendingGroupSelectRef.current = true;
+    socketRef.current.emit(SOCKET_EVENTS.groupCreate, { name: name.trim(), memberIds });
+  }, []);
 
-  const isSelectedOnline = useMemo(
-    () => onlineUsers.some((u) => u.id === selectedId),
-    [onlineUsers, selectedId]
-  );
-
-  // Online users + past partners, deduped, online first then alphabetical.
-  const users = useMemo<ChatContact[]>(() => {
-    const onlineIds = new Set(onlineUsers.map((u) => u.id));
-    const map = new Map<string, ChatContact>();
-    for (const c of contacts) map.set(c.id, { ...c, online: onlineIds.has(c.id) });
-    for (const u of onlineUsers) map.set(u.id, { ...u, online: true });
-    return [...map.values()].sort((a, b) => {
-      if (a.online !== b.online) return a.online ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-  }, [onlineUsers, contacts]);
-
-  const activeMessages = useMemo(() => {
-    if (!myId || !selectedId) return [];
-    return conversations[conversationIdFor(myId, selectedId)] ?? [];
-  }, [conversations, myId, selectedId]);
+  const isSelectedOnline =
+    selected?.type === 'direct' && onlineUsers.some((u) => u.id === selected.id);
+  const selectedGroup =
+    selected?.type === 'group' ? groups.find((g) => g.id === selected.id) ?? null : null;
+  const selectedDirectUser =
+    selected?.type === 'direct' ? knownUsers[selected.id] ?? null : null;
+  const messages = selectedConversationId ? conversations[selectedConversationId] ?? [] : [];
 
   return {
     myId,
     connected,
-    users,
+    users: buildSidebarUsers(onlineUsers, contacts, unread, myId),
+    groups: buildSidebarGroups(groups, unread),
+    allUsers,
     onlineCount: onlineUsers.length,
-    selectedId,
-    selectedUser,
+    selected,
+    selectedGroup,
+    selectedDirectUser,
     isSelectedOnline,
-    messages: activeMessages,
-    selectUser,
+    messages,
+    selectDirect: (id: string) => select('direct', id),
+    selectGroup: (id: string) => select('group', id),
     sendMessage,
+    createGroup,
   };
 }

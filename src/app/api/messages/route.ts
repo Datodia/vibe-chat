@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getConversationService } from '@/features/chat/service/chat.service';
-import { ConversationQuerySchema } from '@/features/chat/validations/chat.validation';
+import {
+  getConversationService,
+  getGroupIfMemberService,
+  getGroupMessagesService,
+} from '@/features/chat/service/chat.service';
 import { auth } from '@/shared/lib/auth';
 
 export async function GET(req: NextRequest) {
@@ -10,14 +13,18 @@ export async function GET(req: NextRequest) {
     const me = session?.user as { id?: string } | undefined;
     if (!me?.id) return NextResponse.json({ error: 'UNAUTHORIZED' }, { status: 401 });
 
-    const parsed = ConversationQuerySchema.safeParse({
-      userId: req.nextUrl.searchParams.get('userId') ?? undefined,
-    });
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'VALIDATION_ERROR' }, { status: 400 });
+    const groupId = req.nextUrl.searchParams.get('groupId');
+    if (groupId) {
+      const group = await getGroupIfMemberService(groupId, me.id);
+      if (!group) return NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 });
+      const messages = await getGroupMessagesService(groupId);
+      return NextResponse.json({ messages });
     }
 
-    const messages = await getConversationService(me.id, parsed.data.userId);
+    const userId = req.nextUrl.searchParams.get('userId');
+    if (!userId) return NextResponse.json({ error: 'VALIDATION_ERROR' }, { status: 400 });
+
+    const messages = await getConversationService(me.id, userId);
     return NextResponse.json({ messages });
   } catch {
     return NextResponse.json({ error: 'INTERNAL_ERROR' }, { status: 500 });
